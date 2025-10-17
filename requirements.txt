@@ -8,3 +8,4 @@ langchain-community
 pillow
 pymilvus
 langchain-core
+asyncio
