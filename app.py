@@ -10,7 +10,6 @@ from pymilvus import MilvusClient
 from PIL import Image
 from pathlib import Path
 
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 ZILLIZ_URI = st.secrets["ZILLIZ_URI"]
 ZILLIZ_TOKEN = st.secrets["ZILLIZ_TOKEN"]
