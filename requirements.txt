@@ -5,6 +5,7 @@ google-generativeai
 google-genai
 langchain-openai
 langchain-community
+langchain_huggingface
 pillow
 pymilvus
 langchain-core

@@ -1,19 +1,11 @@
 import streamlit as st
 import asyncio
 import os
-# from dotenv import load_dotenv
-
-# from mcp.client.stdio import stdio_client # ⬅️ mcp 관련 로직 제거
-# from mcp import ClientSession, StdioServerParameters # ⬅️ mcp 관련 로직 제거
-# from langchain_mcp_adapters.tools import load_mcp_tools # ⬅️ mcp 관련 로직 제거
-# from langgraph.prebuilt import create_react_agent # ⬅️ mcp/langgraph 관련 로직 제거
 
 from google import genai
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-
-# ⬅️ embedding model 추가
-from langchain_openai import OpenAIEmbeddings # ⬅️ Langchain의 최신 OpenAI 임베딩 모듈
-from pymilvus import MilvusClient # ⬅️ Milvus client 추가
+from langchain_huggingface.embeddings import HuggingFaceEndpointEmbeddings
+from pymilvus import MilvusClient 
 
 from PIL import Image
 from pathlib import Path
@@ -22,10 +14,10 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 ZILLIZ_URI = st.secrets["ZILLIZ_URI"]
 ZILLIZ_TOKEN = st.secrets["ZILLIZ_TOKEN"]
+HF_TOKEN = st.secrets["HF_TOKEN"]
 
-EMBEDDING_MODEL='text-embedding-3-small'
-EMBEDDING_DIMENSION =1536
-COLLECTION_NAME='shinahn_collection'
+EMBEDDING_MODEL = "jhgan/ko-sroberta-nli"
+COLLECTION_NAME='shinahn_collection_hf'
 MODEL_NAME = 'gemini-2.5-flash'
 
 milvus_client = MilvusClient(uri=ZILLIZ_URI, token=ZILLIZ_TOKEN)
@@ -33,15 +25,9 @@ gemini_client  = genai.Client()
 
 # 환경변수
 ASSETS = Path("assets")
-# GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-# # ⬅️ OpenAI 및 Milvus 관련 환경 변수 추가 (st.secrets에 저장되어 있다고 가정)
-# OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"] # OpenAI API Key
-# MILVUS_URI = st.secrets["MILVUS_URI"]
-# MILVUS_TOKEN = st.secrets["MILVUS_TOKEN"]
-# COLLECTION_NAME = st.secrets["COLLECTION_NAME"]
 
 # # 모델 및 시스템 설정
-# MODEL_NAME = 'gemini-2.5-flash'
+
 SYSTEM_PROMPT = "당신은 친절한 마케팅 상담사입니다. 가맹점명을 받아 해당 가맹점의 방문 고객 현황을 분석하고, 분석 결과를 바탕으로 적절한 마케팅 방법과 채널, 마케팅 메시지를 추천합니다. 결과는 짧고 간결하게, 분석 결과에는 가능한 표를 사용하여 알아보기 쉽게 설명해주세요."
 GREETING = "마케팅이 필요한 가맹점을 알려주세요 \n(조회가능 예시: 동대*, 유유*, 똥파*, 본죽*, 본*, 원조*, 희망*, 혁이*, H커*, 케키*)"
 
@@ -49,17 +35,19 @@ GREETING = "마케팅이 필요한 가맹점을 알려주세요 \n(조회가능 
 # 🔍 Embedding 및 Retrieval 함수
 # ---------------------------------------------------------------------------------
 
-embedding_model = OpenAIEmbeddings(
-        api_key=OPENAI_API_KEY,
+@st.cache_resource
+def get_embedding_model():
+    return HuggingFaceEndpointEmbeddings(
         model=EMBEDDING_MODEL,
-        # 'dimensions' 파라미터를 사용하여 벡터 길이를 1536으로 고정합니다.
-        dimensions=EMBEDDING_DIMENSION
-)
+        huggingfacehub_api_token=HF_TOKEN,
+    )
+
+embedding_model = get_embedding_model() 
 
 @st.cache_resource
-def embed_query(query: str, embedding_model):
+def embed_query(query: str):  # 👈 embedding_model 인수를 제거
     """사용자 쿼리를 벡터로 임베딩합니다."""
-    # Langchain Embeddings 인터페이스 사용: embed_query
+    global embedding_model 
     return embedding_model.embed_query(query)
 
 def retrieve_from_milvus(query_vector: list):
@@ -73,13 +61,11 @@ def retrieve_from_milvus(query_vector: list):
             collection_name=COLLECTION_NAME,
             data=search_vectors,      # 검색할 쿼리 벡터
             limit=1,                   # 상위 1개의 결과만 가져옴 (요청에 따라 top_k=1)
-            output_fields=output_fields # ⬅️ 검색 결과에 포함할 필드 지정
+            output_fields=output_fields # 검색 결과에 포함할 필드 지정
         )
 
         # 결과 파싱: 요청된 형식에 따라 가장 첫 번째 엔티티의 'description' 필드 반환
         if search_result and search_result[0]:
-            # result = search_result[0][0]['entity']['description']
-            # description 필드가 검색 결과의 RAG 컨텍스트 데이터라고 가정
             result = search_result[0][0]['entity']['description']
             return result
         return None
@@ -142,7 +128,7 @@ async def generate_answer_with_description_rag(gemini_client, user_query: list):
     """
     검색된 컨텍스트(문서 내용 + description 메타데이터)를 기반으로 Gemini에게 답변을 요청합니다.
     """
-    query_vector = embed_query(query, embedding_model)
+    query_vector = embed_query(query)
     full_context = retrieve_from_milvus(query_vector)
 
 
@@ -190,16 +176,8 @@ if query := st.chat_input("가맹점 이름을 입력하세요"):
 
     with st.spinner("Thinking..."):
         try:
-            # RAG 로직 실행
-            # process_user_input_rag 함수는 내부에서 동기 함수를 호출하므로, asyncio.run을 제거하고 직접 호출합니다.
-            # 하지만 Streamlit의 UI 업데이트를 위해 process_user_input_rag를 async로 유지하고 asyncio.run을 사용합니다.
-            # RAG 함수는 실제 비동기 I/O를 수행하지 않으므로, 사실상 `await process_user_input_rag(query)`로 변경하는 것이 더 자연스럽지만
-            # 기존 코드 구조를 유지하기 위해 asyncio.run을 사용합니다.
 
-            # 기존 코드의 구조를 유지하며, RAG 함수는 async로 정의합니다.
-            # st.chat_input 콜백은 동기 컨텍스트이므로 asyncio.run을 사용합니다.
             reply = asyncio.run(generate_answer_with_description_rag(gemini_client=gemini_client,user_query=query))
-
             st.session_state.messages.append(AIMessage(content=reply))
             render_chat_message("assistant", reply)
 
